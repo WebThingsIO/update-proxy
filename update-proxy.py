@@ -2,8 +2,10 @@
 
 from collections import deque
 from sanic import Sanic
-from sanic.response import json, text
-from threading import Thread
+from sanic.response import json
+from sanic_compress import Compress
+from sanic_cors import CORS
+from threading import RLock, Thread
 import requests
 import time
 
@@ -11,6 +13,7 @@ import time
 _REFRESH_TIMEOUT = 60
 _UPSTREAM = 'https://api.github.com/repos/mozilla-iot/gateway/releases'
 _LIST = None
+_LOCK = RLock()
 _REQUESTS = deque()
 
 
@@ -23,18 +26,19 @@ def update_list():
         try:
             r = requests.get(_UPSTREAM)
             if r.status_code == 200:
-                _LIST = r.text
-        except requests.exceptions.RequestException as e:
+                with _LOCK:
+                    _LIST = r.json()
+
+            # Clear out old items from the request list
+            one_day_ago = time.time() - (24 * 60 * 60)
+            while len(_REQUESTS) > 0:
+                req = _REQUESTS.popleft()
+                if req[0] >= one_day_ago:
+                    _REQUESTS.appendleft(req)
+                    break
+        except Exception as e:
             print(e)
             pass
-
-        # Clear out old items from the request list
-        one_day_ago = time.time() - (24 * 60 * 60)
-        while len(_REQUESTS) > 0:
-            req = _REQUESTS.popleft()
-            if req[0] >= one_day_ago:
-                _REQUESTS.appendleft(req)
-                break
 
         # Sleep for a bit to avoid Github's rate limiting
         time.sleep(_REFRESH_TIMEOUT)
@@ -42,14 +46,17 @@ def update_list():
 
 # Create the sanic app
 app = Sanic()
+Compress(app)
+CORS(app)
 
 
 # Serve the list
 @app.route('/releases')
 async def get_list(request):
     _REQUESTS.append((time.time(), request.headers.get('User-Agent', None)))
-    return text(_LIST, content_type='application/json; charset=utf-8',
-                headers={'Access-Control-Allow-Origin', '*'})
+
+    with _LOCK:
+        return json(_LIST)
 
 
 # Analytics route
@@ -67,7 +74,7 @@ async def analytics(request):
         total += 1
 
     requests['total'] = total
-    return json(requests, headers={'Access-Control-Allow-Origin', '*'})
+    return json(requests)
 
 
 if __name__ == '__main__':
