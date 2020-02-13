@@ -1,30 +1,46 @@
 #!/usr/bin/env python3
 
+"""
+Update proxy server.
+
+This server reads a list of releases from GitHub and serves them back to the
+gateway.
+"""
+
 from collections import deque
 from sanic import Sanic
-from sanic.response import json
-from sanic_compress import Compress
+from sanic.response import json as response_json
 from sanic_cors import CORS
+from sanic_gzip import Compress
 from threading import RLock, Thread
+import argparse
 import requests
 import time
 
 
+_DEFAULT_PORT = 80
+_DEFAULT_UPSTREAM = 'https://api.github.com/repos/mozilla-iot/gateway/releases'
+
 _REFRESH_TIMEOUT = 60
-_UPSTREAM = 'https://api.github.com/repos/mozilla-iot/gateway/releases'
 _LIST = None
 _LOCK = RLock()
 _REQUESTS = deque()
 
 
-# Refresh the release list every 60 seconds
-def update_list():
+def update_list(repo):
+    """
+    Update the list.
+
+    This will pull the list of releases from the repo periodically.
+
+    repo -- the GitHub repo
+    """
     global _LIST
 
     while True:
         # Pull the latest release list
         try:
-            r = requests.get(_UPSTREAM)
+            r = requests.get(repo)
             if r.status_code == 200:
                 with _LOCK:
                     _LIST = r.json()
@@ -45,23 +61,28 @@ def update_list():
 
 
 # Create the sanic app
-app = Sanic()
-Compress(app)
+app = Sanic('update-proxy')
 CORS(app)
+compress = Compress()
 
 
 # Serve the list
 @app.route('/releases')
+@compress.compress()
 async def get_list(request):
-    _REQUESTS.append((time.time(), request.headers.get('User-Agent', None)))
+    """Get the release list."""
+    ua = request.headers.get('User-Agent', None)
+    _REQUESTS.append((time.time(), ua))
 
     with _LOCK:
-        return json(_LIST)
+        return response_json(_LIST)
 
 
 # Analytics route
 @app.route('/releases/analytics')
+@compress.compress()
 async def analytics(request):
+    """Return some analytics."""
     requests = {}
     total = 0
     for req in _REQUESTS:
@@ -74,11 +95,28 @@ async def analytics(request):
         total += 1
 
     requests['total'] = total
-    return json(requests)
+    return response_json(requests)
 
 
 if __name__ == '__main__':
-    t = Thread(target=update_list)
+    parser = argparse.ArgumentParser(
+        description='Update proxy server for WebThings Gateway'
+    )
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=_DEFAULT_PORT,
+        help='port for server',
+    )
+    parser.add_argument(
+        '--upstream',
+        type=str,
+        default=_DEFAULT_UPSTREAM,
+        help='URL of release list',
+    )
+    args = parser.parse_args()
+
+    t = Thread(target=update_list, args=(args.upstream,))
     t.daemon = True
     t.start()
 
@@ -86,4 +124,4 @@ if __name__ == '__main__':
     while _LIST is None:
         time.sleep(.1)
 
-    app.run(host='0.0.0.0', port=80)
+    app.run(host='0.0.0.0', port=args.port)
