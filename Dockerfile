@@ -1,7 +1,6 @@
-FROM python:3.8
+FROM python:3.8-slim
 
-RUN pip3 install sanic sanic-gzip requests
-RUN pip3 install --pre 'sanic-cors>0.9.99'
-COPY update-proxy.py /update-proxy.py
+COPY . /app
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
-ENTRYPOINT ["/update-proxy.py"]
+ENTRYPOINT ["/app/update-proxy.py"]
