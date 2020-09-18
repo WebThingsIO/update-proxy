@@ -19,7 +19,7 @@ import time
 
 
 _DEFAULT_PORT = 80
-_DEFAULT_UPSTREAM = 'https://api.github.com/repos/mozilla-iot/gateway/releases'
+_DEFAULT_UPSTREAM = 'https://api.github.com/repos/WebThingsIO/gateway/releases'
 
 _REFRESH_TIMEOUT = 60
 _LIST = None
